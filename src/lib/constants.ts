@@ -1,3 +1,5 @@
+export const APP_NAME = "OpenSignal";
+
 export const LANGUAGES = [
   "javascript",
   "typescript",

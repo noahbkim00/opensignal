@@ -7,6 +7,7 @@ import {
   getSpreadsheetId,
   getUserFlags,
 } from "@/lib/queries";
+import { APP_NAME } from "@/lib/constants";
 import { DashboardClient } from "./dashboard-client";
 
 export default async function DashboardPage() {
@@ -34,7 +35,7 @@ export default async function DashboardPage() {
     <main className="mx-auto w-full max-w-3xl flex-1 p-6">
       <header className="mb-8 flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold">opensignal</h1>
+          <h1 className="text-xl font-semibold">{APP_NAME}</h1>
           <p className="text-sm text-black/60 dark:text-white/60">
             {flags?.email}
           </p>
