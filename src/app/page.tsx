@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { auth, signIn } from "@/lib/auth";
+import { APP_NAME } from "@/lib/constants";
 
 export default async function Home() {
   const session = await auth();
@@ -10,7 +11,7 @@ export default async function Home() {
   return (
     <main className="flex flex-1 items-center justify-center p-8">
       <div className="w-full max-w-md rounded-xl border border-black/10 dark:border-white/15 p-8 text-center">
-        <h1 className="text-2xl font-semibold">opensignal</h1>
+        <h1 className="text-2xl font-semibold">{APP_NAME}</h1>
         <p className="mt-3 text-sm text-black/60 dark:text-white/60">
           Sign in with Google to configure your languages and repositories.
           Matching beginner-friendly issues are written to a Google Sheet in

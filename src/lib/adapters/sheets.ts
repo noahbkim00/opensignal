@@ -2,8 +2,9 @@ import { google, sheets_v4 } from "googleapis";
 import type { SheetProvider } from "../core/interfaces";
 import type { MatchedIssue, IssueStatus } from "../core/types";
 import { determineIssueStatus } from "../core/matching";
+import { APP_NAME } from "../constants";
 
-const SHEET_TITLE = "opensignal";
+const SHEET_TITLE = `${APP_NAME} Issues`;
 const SHEET_NAME = "Issues";
 const HEADERS = [
   "ID",
