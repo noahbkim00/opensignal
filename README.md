@@ -53,6 +53,33 @@ npm run dev
 
 Open `http://localhost:3000`. If Google sign-in, token refresh, or Sheets writes fail locally, re-check the Google OAuth/API and database setup in [self_host.md](./self_host.md).
 
+## Run Against Production
+
+Use the deployed app when you want to exercise the integration without setting up local Google OAuth, Postgres, and production-like secrets yourself.
+
+1. Open `https://www.opensig.dev`.
+2. Sign in with Google and approve the requested access.
+3. Select one or more languages, or add a public custom repository.
+4. Click **Run now**.
+5. Open the Google Sheet link on the dashboard and confirm rows were created or updated.
+6. Confirm the dashboard's latest run status shows the run result.
+
+To test the live HTTP endpoint directly, sign in through the browser first, copy the `__Secure-authjs.session-token` cookie for `https://www.opensig.dev`, and pass it to `curl`:
+
+```bash
+curl -i -X POST https://www.opensig.dev/api/run \
+  -H "Content-Type: application/json" \
+  -H "Cookie: __Secure-authjs.session-token=PASTE_SESSION_TOKEN_HERE" \
+  -d '{
+    "languages": [],
+    "repos": ["vercel/next.js"],
+    "maxIssues": 1,
+    "dryRun": false
+  }'
+```
+
+For a no-write API check, set `"dryRun": true`. The deployed endpoint returns the same workflow context as the local endpoint: effective repos, matched issue count, sheet URL, action counts, warnings, and errors.
+
 ## Scripts
 
 | Command | Purpose |
@@ -104,12 +131,12 @@ Parameters:
 | `maxIssues` | integer `1..100` | Limits how many new issues are written in this run. |
 | `dryRun` | boolean | Reads GitHub and returns context without creating/updating Google Sheets rows. |
 
-Example local request after signing in through the browser and copying the session cookie:
+Example production request after signing in through the browser and copying the session cookie:
 
 ```bash
-curl -X POST http://localhost:3000/api/run \
+curl -X POST https://www.opensig.dev/api/run \
   -H "Content-Type: application/json" \
-  -H "Cookie: $NEXTAUTH_COOKIE" \
+  -H "Cookie: __Secure-authjs.session-token=PASTE_SESSION_TOKEN_HERE" \
   -d '{
     "languages": ["typescript"],
     "repos": ["vercel/next.js"],
