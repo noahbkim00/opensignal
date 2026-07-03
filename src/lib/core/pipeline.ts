@@ -18,6 +18,8 @@ export interface PipelineDeps {
   repos: Repositories;
 }
 
+const PIPELINE_FETCH_CONCURRENCY = 5;
+
 export async function runPipeline(
   userId: string,
   trigger: RunTrigger,
@@ -121,7 +123,11 @@ export async function runPipeline(
     }
 
     // Check for stale issues
-    const staleUpdates = await detectStaleIssues(trackedIssues, github);
+    const staleUpdates = await detectStaleIssues(
+      trackedIssues,
+      allMatchedIssues,
+      github
+    );
     let staleIssuesCount = 0;
 
     if (staleUpdates.length > 0) {
@@ -174,47 +180,53 @@ async function fetchAllMatchingIssues(
   curatedRepos: { owner: string; name: string; languages: string[] }[],
   github: GitHubClient
 ): Promise<MatchedIssue[]> {
-  const allIssues: MatchedIssue[] = [];
+  const curatedByRepo = new Map(
+    curatedRepos.map((repo) => [
+      `${repo.owner}/${repo.name}`.toLowerCase(),
+      repo,
+    ])
+  );
 
-  for (const repo of effectiveRepos) {
-    try {
-      const issues = await github.fetchIssuesForRepo(
-        repo.owner,
-        repo.name,
-        repo.labelMapping
-      );
+  const issueGroups = await mapWithConcurrency(
+    effectiveRepos,
+    PIPELINE_FETCH_CONCURRENCY,
+    async (repo) => {
+      try {
+        const issues = await github.fetchIssuesForRepo(
+          repo.owner,
+          repo.name,
+          repo.labelMapping
+        );
 
-      const matchingIssues = filterMatchingIssues(issues, repo.labelMapping);
+        const matchingIssues = filterMatchingIssues(issues, repo.labelMapping);
 
-      // Find languages for this repo
-      const curatedEntry = curatedRepos.find(
-        (c) =>
-          c.owner.toLowerCase() === repo.owner.toLowerCase() &&
-          c.name.toLowerCase() === repo.name.toLowerCase()
-      );
-      const languages = curatedEntry?.languages ?? [];
+        const curatedEntry = curatedByRepo.get(
+          `${repo.owner}/${repo.name}`.toLowerCase()
+        );
+        const languages = curatedEntry?.languages ?? [];
 
-      for (const issue of matchingIssues) {
-        allIssues.push({
+        return matchingIssues.map((issue) => ({
           ...issue,
           repo: { owner: repo.owner, name: repo.name },
           languages,
-        });
+        }));
+      } catch (error) {
+        // Log but continue with other repos
+        console.error(
+          `Failed to fetch issues for ${repo.owner}/${repo.name}:`,
+          error
+        );
+        return [];
       }
-    } catch (error) {
-      // Log but continue with other repos
-      console.error(
-        `Failed to fetch issues for ${repo.owner}/${repo.name}:`,
-        error
-      );
     }
-  }
+  );
 
-  return allIssues;
+  return issueGroups.flat();
 }
 
 async function detectStaleIssues(
   trackedIssues: { githubIssueId: number; issueNumber: number; repoOwner: string; repoName: string; status: IssueStatus; sheetRowId: string | null }[],
+  fetchedIssues: MatchedIssue[],
   github: GitHubClient
 ): Promise<
   Array<{
@@ -231,35 +243,87 @@ async function detectStaleIssues(
 
   // Only check issues that are currently "open"
   const openIssues = trackedIssues.filter((t) => t.status === "open");
+  const fetchedById = new Map(fetchedIssues.map((issue) => [issue.id, issue]));
+  const statusChecks: typeof openIssues = [];
 
   for (const tracked of openIssues) {
-    try {
-      const currentIssue = await github.fetchIssueStatus(
-        tracked.repoOwner,
-        tracked.repoName,
-        tracked.issueNumber
-      );
+    const fetchedIssue = fetchedById.get(tracked.githubIssueId);
+    if (!fetchedIssue) {
+      statusChecks.push(tracked);
+      continue;
+    }
 
-      if (!currentIssue) {
-        continue; // Issue may have been deleted
+    const newStatus = determineIssueStatus(fetchedIssue);
+    if (newStatus !== tracked.status) {
+      updates.push({
+        githubIssueId: tracked.githubIssueId,
+        sheetRowId: tracked.sheetRowId,
+        newStatus,
+      });
+    }
+  }
+
+  const checkedUpdates = await mapWithConcurrency(
+    statusChecks,
+    PIPELINE_FETCH_CONCURRENCY,
+    async (tracked) => {
+      try {
+        const currentIssue = await github.fetchIssueStatus(
+          tracked.repoOwner,
+          tracked.repoName,
+          tracked.issueNumber
+        );
+
+        if (!currentIssue) {
+          return null; // Issue may have been deleted
+        }
+
+        const newStatus = determineIssueStatus(currentIssue);
+
+        if (newStatus !== tracked.status) {
+          return {
+            githubIssueId: tracked.githubIssueId,
+            sheetRowId: tracked.sheetRowId,
+            newStatus,
+          };
+        }
+      } catch (error) {
+        console.error(
+          `Failed to check status for issue ${tracked.githubIssueId}:`,
+          error
+        );
       }
 
-      const newStatus = determineIssueStatus(currentIssue);
+      return null;
+    }
+  );
 
-      if (newStatus !== tracked.status) {
-        updates.push({
-          githubIssueId: tracked.githubIssueId,
-          sheetRowId: tracked.sheetRowId,
-          newStatus,
-        });
-      }
-    } catch (error) {
-      console.error(
-        `Failed to check status for issue ${tracked.githubIssueId}:`,
-        error
-      );
+  for (const update of checkedUpdates) {
+    if (update) {
+      updates.push(update);
     }
   }
 
   return updates;
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      results[index] = await mapper(items[index], index);
+    }
+  }
+
+  const workerCount = Math.min(concurrency, items.length);
+  await Promise.all(Array.from({ length: workerCount }, worker));
+
+  return results;
 }

@@ -1,135 +1,99 @@
-# opensignal
+# OpenSignal
 
-A multi-user web app that finds beginner-friendly open source issues matching your languages and custom repositories, then writes them to a Google Sheet in your own Google Drive. The web UI is configuration only; the Sheet is the output.
+OpenSignal is a multi-user web app that finds beginner-friendly open source issues matching a user's languages and custom repositories, then writes them to a Google Sheet in that user's own Google Drive.
+
+The web UI is for configuration only. The Google Sheet is the output.
 
 ## Stack
 
-- Next.js 16 (App Router) on Vercel + Vercel Cron
-- Drizzle ORM + Neon Postgres
-- Auth.js v5 (Google OAuth, `drive.file` scope only)
-- Octokit (single server-side GitHub credential)
-- Google Sheets API (per-user OAuth)
+- Next.js 16 App Router
+- Drizzle ORM with Postgres
+- Auth.js v5 with Google OAuth and `drive.file` scope
+- Octokit with one server-side GitHub credential
+- Google Sheets API with per-user OAuth
 
 ## Architecture
 
-Three layers with one direction of dependency:
+The app is split into three layers with one direction of dependency:
 
-- `src/app` — pages, API route handlers, cron endpoint, Auth.js.
-- `src/lib/core` — framework-agnostic domain logic (`pipeline.ts`, `matching.ts`) depending only on interfaces.
-- `src/lib/adapters` — implementations of `GitHubClient`, `SheetProvider`, `Repositories`.
+- `src/app` - pages, API route handlers, cron endpoint, and Auth.js routing
+- `src/lib/core` - framework-agnostic domain logic in `pipeline.ts` and `matching.ts`
+- `src/lib/adapters` - implementations of `GitHubClient`, `SheetProvider`, and `Repositories`
 
-## Setup
+## Local Development
 
-### 1. Install
+### 1. Install dependencies
 
 ```bash
 npm install
 ```
 
-### 2. Environment
+### 2. Configure environment variables
 
-Copy `.env.example` to `.env.local` and fill in:
+Copy `.env.example` to `.env.local` and fill in each value:
+
+```bash
+cp .env.example .env.local
+```
 
 | Variable | Description |
 |---|---|
-| `DATABASE_URL` | Neon Postgres connection string |
+| `DATABASE_URL` | Postgres connection string |
 | `NEXTAUTH_SECRET` | Random secret for Auth.js |
-| `NEXTAUTH_URL` | App URL (e.g. `http://localhost:3000`) |
+| `NEXTAUTH_URL` | Local app URL, usually `http://localhost:3000` |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google OAuth credentials |
-| `GITHUB_TOKEN` | GitHub PAT for fetching public issues |
+| `GITHUB_TOKEN` | GitHub token for fetching public issues |
 | `TOKEN_ENCRYPTION_KEY` | 32-byte base64 key for encrypting refresh tokens |
 | `CRON_SECRET` | Bearer secret protecting `/api/cron` |
 
-Generate the encryption key:
+Generate a token encryption key with:
 
 ```bash
 node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 ```
 
-### 3. Google Cloud Console
-
-This produces the `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. These identify the **application** (not you personally); every user signs in through them and receives their own per-user token.
-
-**3.1 Create / select a project**
-
-1. Go to https://console.cloud.google.com/.
-2. In the top project selector, click **New Project** (or select an existing one). Name it (e.g. "opensignal") and click **Create**.
-
-**3.2 Enable the required APIs**
-
-1. Navigate to **APIs & Services → Library**.
-2. Search for **Google Sheets API**, open it, click **Enable**.
-3. Search for **Google Drive API**, open it, click **Enable**.
-
-**3.3 Configure the OAuth consent screen**
-
-1. Go to **APIs & Services → OAuth consent screen**.
-2. Choose **External** user type, click **Create**.
-3. Fill in the required app info (app name, user support email, developer contact email). Click **Save and Continue**.
-4. On the **Scopes** step, click **Add or Remove Scopes** and add ONLY:
-   - `openid`
-   - `.../auth/userinfo.email`
-   - `.../auth/userinfo.profile`
-   - `https://www.googleapis.com/auth/drive.file`
-
-   Do **not** add the broad `.../auth/drive` or `.../auth/spreadsheets` scopes. `drive.file` limits the app to files it creates, which is a hard privacy requirement.
-5. Click **Save and Continue**.
-6. On **Test users**, add the Google accounts allowed to sign in while the app is unpublished (see the note below). Click **Save and Continue**.
-
-**3.4 Create the OAuth Client ID + Secret**
-
-1. Go to **APIs & Services → Credentials**.
-2. Click **Create Credentials → OAuth client ID**.
-3. **Application type:** Web application.
-4. **Name:** anything (e.g. "Web client").
-5. Under **Authorized redirect URIs**, click **Add URI** and enter:
-   - Local: `http://localhost:3000/api/auth/callback/google`
-   - Production (add after deploy): `https://YOUR_DOMAIN/api/auth/callback/google`
-6. Click **Create**. A dialog shows your **Client ID** and **Client secret**.
-7. Copy them into your env file (and Vercel project settings) as:
-   - `GOOGLE_CLIENT_ID` = the Client ID
-   - `GOOGLE_CLIENT_SECRET` = the Client secret
-
-   Treat the secret like a password. Never commit it; it lives only in `.env.local` and Vercel environment variables.
-
-**3.5 Publishing (letting other users in)**
-
-- While the consent screen is in **Testing** status, only the emails you added as test users can sign in, and their refresh tokens expire after 7 days.
-- To allow arbitrary users, open **OAuth consent screen** and click **Publish App**. Because you only request the non-sensitive `drive.file` scope (not the broad `drive`/`spreadsheets` scopes), this typically does **not** trigger Google's full verification/security review.
-
-### 4. Database
+### 3. Prepare the database
 
 ```bash
-npm run db:push     # apply schema to Neon
-npm run db:seed     # seed curated repos
+npm run db:push
+npm run db:seed
 ```
 
-### 5. Run
+### 4. Run the app
 
 ```bash
 npm run dev
 ```
 
-Open http://localhost:3000.
+Open `http://localhost:3000`.
 
 ## Scripts
 
 | Command | Purpose |
 |---|---|
-| `npm run dev` | Start dev server |
-| `npm run build` | Production build |
-| `npm run test:run` | Run unit tests (Vitest) |
-| `npm run lint` | ESLint |
-| `npm run db:generate` | Generate SQL migrations |
-| `npm run db:push` | Push schema to database |
-| `npm run db:seed` | Seed curated repos |
+| `npm run dev` | Start the development server |
+| `npm run build` | Build the production app |
+| `npm run start` | Start the production server after a build |
+| `npm run test:run` | Run unit tests with Vitest |
+| `npm run lint` | Run ESLint |
+| `npm run db:generate` | Generate Drizzle migrations |
+| `npm run db:migrate` | Apply Drizzle migrations |
+| `npm run db:push` | Push the schema directly to the database |
+| `npm run db:seed` | Seed curated repositories |
 
 ## Run Pipeline
 
-Each run (manual via "Run now" or daily via cron): resolve effective repo set → fetch matching GitHub issues → diff against tracked issues → append new rows to the Sheet → mark newly stale (closed/assigned) rows → record the run. Deduplication key is `(user, GitHub issue ID)`; runs are idempotent and per-user concurrency-locked.
+Each run, whether triggered manually by "Run now" or by a scheduler, does the following:
 
-## Deployment (Vercel)
+1. Resolve the user's effective repository set.
+2. Fetch matching GitHub issues.
+3. Diff against tracked issues.
+4. Append new rows to the user's Google Sheet.
+5. Mark newly stale rows as `closed` or `assigned`.
+6. Record the run outcome.
 
-- Set all environment variables in the Vercel project.
-- `vercel.json` schedules `/api/cron` daily at 06:00 UTC.
-- Vercel Cron sends the `CRON_SECRET` as a Bearer token in the `Authorization` header.
+Runs are idempotent by `(user, GitHub issue ID)` and guarded by a per-user active-run check.
+
+## Self Hosting
+
+For production setup, OAuth configuration, database provisioning, and scheduler configuration, see [self_host.md](./self_host.md).

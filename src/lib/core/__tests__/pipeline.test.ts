@@ -311,4 +311,108 @@ describe("runPipeline", () => {
     expect(result.staleIssuesCount).toBe(1);
     expect(sheets.statusUpdates[0].status).toBe("assigned");
   });
+
+  it("fetches matching issues from repos with bounded concurrency", async () => {
+    const curatedRepos: CuratedRepoConfig[] = Array.from(
+      { length: 8 },
+      (_, index) => ({
+        owner: "test",
+        name: `repo-${index}`,
+        languages: ["javascript"],
+        labelMapping: ["good first issue"],
+      })
+    );
+
+    let activeFetches = 0;
+    let maxActiveFetches = 0;
+
+    const github: GitHubClient = {
+      async fetchIssuesForRepo() {
+        activeFetches++;
+        maxActiveFetches = Math.max(maxActiveFetches, activeFetches);
+
+        await new Promise((resolve) => setTimeout(resolve, 10));
+
+        activeFetches--;
+        return [];
+      },
+      async validateRepoExists() {
+        return { exists: true, isPublic: true };
+      },
+      async fetchIssueStatus() {
+        return null;
+      },
+    };
+
+    const result = await runPipeline("user-1", "manual", {
+      github,
+      sheets: createFakeSheetProvider(),
+      repos: createFakeRepositories({ curatedRepos }),
+    });
+
+    expect(result.success).toBe(true);
+    expect(maxActiveFetches).toBeGreaterThan(1);
+    expect(maxActiveFetches).toBeLessThanOrEqual(5);
+  });
+
+  it("uses fetched matching issues to detect assigned tracked issues without status refetch", async () => {
+    const issues: GitHubIssue[] = [
+      {
+        id: 100,
+        number: 1,
+        title: "First issue",
+        url: "https://github.com/test/repo/issues/1",
+        labels: ["good first issue"],
+        createdAt: new Date(),
+        state: "open",
+        assignee: "someone",
+      },
+    ];
+
+    const trackedIssues: TrackedIssueRecord[] = [
+      {
+        id: "tracked-100",
+        githubIssueId: 100,
+        issueNumber: 1,
+        repoOwner: "test",
+        repoName: "repo",
+        issueUrl: "https://github.com/test/repo/issues/1",
+        issueTitle: "First issue",
+        labels: ["good first issue"],
+        status: "open",
+        sheetRowId: "row-100",
+      },
+    ];
+
+    let statusFetches = 0;
+    const github: GitHubClient = {
+      async fetchIssuesForRepo() {
+        return issues;
+      },
+      async validateRepoExists() {
+        return { exists: true, isPublic: true };
+      },
+      async fetchIssueStatus() {
+        statusFetches++;
+        throw new Error("should not fetch status for issues already fetched");
+      },
+    };
+
+    const sheets = createFakeSheetProvider();
+    const repos = createFakeRepositories({ trackedIssues });
+
+    const result = await runPipeline("user-1", "manual", {
+      github,
+      sheets,
+      repos,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.staleIssuesCount).toBe(1);
+    expect(statusFetches).toBe(0);
+    expect(sheets.statusUpdates[0]).toEqual({
+      sheetRowId: "row-100",
+      status: "assigned",
+    });
+  });
 });
