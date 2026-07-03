@@ -47,6 +47,19 @@ export interface RunResult {
   newIssuesCount: number;
   staleIssuesCount: number;
   error?: string;
+  dryRun?: boolean;
+  effectiveRepos?: RepoWithLabels[];
+  matchedIssuesCount?: number;
+  sheetId?: string | null;
+  sheetUrl?: string | null;
+  actions?: {
+    fetchedRepos: number;
+    createdSheet: boolean;
+    appendedRows: number;
+    updatedStatuses: number;
+    skippedSheetWrites: boolean;
+  };
+  warnings?: string[];
 }
 
 export type RunTrigger = "cron" | "manual";

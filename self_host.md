@@ -30,7 +30,7 @@ Create the production environment variables in your hosting provider:
 | `NEXTAUTH_URL` | Public URL of your deployed app |
 | `GOOGLE_CLIENT_ID` | Google OAuth web client ID |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth web client secret |
-| `GITHUB_TOKEN` | Server-side GitHub token for fetching issues |
+| `GITHUB_TOKEN` | Server-side GitHub token for fetching public issues |
 | `TOKEN_ENCRYPTION_KEY` | 32-byte base64 key for encrypting refresh tokens |
 | `CRON_SECRET` | Secret used to authorize scheduled runs |
 
@@ -90,7 +90,7 @@ The app requires a refresh token for scheduled runs. The existing auth flow requ
 
 Create a GitHub token for server-side issue fetching and set it as `GITHUB_TOKEN`.
 
-The app does not ask end users to authenticate with GitHub. One server-side credential is used for all public issue lookups.
+The app does not ask end users to authenticate with GitHub. This is intentional: OpenSignal only reads public repository issue metadata, so one server-side credential is used for all GitHub lookups. This keeps the demo focused on the cross-system workflow while still authenticating GitHub API requests and avoiding unauthenticated rate limits.
 
 ## 5. Deploy the Web App
 
@@ -105,6 +105,39 @@ npm run start
 ```
 
 Your host must expose the app over HTTPS and set `NEXTAUTH_URL` to that public origin.
+
+### Vercel
+
+This repository includes `vercel.json` for Vercel Cron Jobs and is linked locally to `n5m/opensignal`.
+
+The current production URL is:
+
+```text
+https://www.opensig.dev
+```
+
+Set these environment variables in Vercel for Production:
+
+| Variable | Production value |
+|---|---|
+| `DATABASE_URL` | Production Postgres connection string |
+| `NEXTAUTH_SECRET` | Random Auth.js secret |
+| `NEXTAUTH_URL` | `https://www.opensig.dev` |
+| `GOOGLE_CLIENT_ID` | Google OAuth web client ID |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth web client secret |
+| `GITHUB_TOKEN` | GitHub token for issue fetching |
+| `TOKEN_ENCRYPTION_KEY` | Stable 32-byte base64 key |
+| `CRON_SECRET` | Random cron bearer secret |
+
+The linked project currently has these variables configured. If you change any of them in Vercel, trigger a new production deployment afterward.
+
+Add this Google OAuth redirect URI to the Google Cloud OAuth client:
+
+```text
+https://www.opensig.dev/api/auth/callback/google
+```
+
+The Vercel CLI may not be able to connect the GitHub repository automatically. If automatic deploys are desired, connect the GitHub repository manually in the Vercel dashboard for the `opensignal` project, then redeploy from the dashboard.
 
 ## 6. Configure Scheduled Runs
 
@@ -123,7 +156,41 @@ curl -H "Authorization: Bearer $CRON_SECRET" https://YOUR_DOMAIN/api/cron
 
 The included `vercel.json` schedules this endpoint daily at `06:00 UTC` for Vercel deployments. For other hosts, configure the equivalent scheduler in that platform or in an external cron service.
 
-## 7. Smoke Test Production
+## 7. Test the Live Integration Endpoint
+
+After signing in through the browser, `POST /api/run` can be used to trigger or inspect the integration for that signed-in user.
+
+Example parameterized dry run:
+
+```bash
+curl -X POST https://YOUR_DOMAIN/api/run \
+  -H "Content-Type: application/json" \
+  -H "Cookie: $NEXTAUTH_COOKIE" \
+  -d '{
+    "languages": ["typescript"],
+    "repos": ["vercel/next.js"],
+    "maxIssues": 5,
+    "dryRun": true
+  }'
+```
+
+Example write run:
+
+```bash
+curl -X POST https://YOUR_DOMAIN/api/run \
+  -H "Content-Type: application/json" \
+  -H "Cookie: $NEXTAUTH_COOKIE" \
+  -d '{
+    "languages": ["typescript"],
+    "repos": ["vercel/next.js"],
+    "maxIssues": 5,
+    "dryRun": false
+  }'
+```
+
+The response includes the effective repos, number of matched GitHub issues, Google Sheet URL, action counts, warnings, and errors. `dryRun: true` reads GitHub and returns context without writing to Google Sheets.
+
+## 8. Smoke Test Production
 
 After deployment:
 
@@ -132,8 +199,11 @@ After deployment:
 3. Select at least one language.
 4. Optionally add a public custom repository.
 5. Click "Run now".
-6. Confirm a Google Sheet named `OpenSignal Issues` appears in the signed-in user's Drive.
-7. Confirm the latest run status appears on the dashboard.
+6. Call `POST /api/run` with a parameterized body, or use the UI run button.
+7. Confirm a Google Sheet named `OpenSignal Issues` appears in the signed-in user's Drive.
+8. Confirm the latest run status appears on the dashboard.
+9. Call `GET /api/cron` without `CRON_SECRET` and confirm it returns `401`.
+10. Call `GET /api/cron` with `Authorization: Bearer <CRON_SECRET>` and confirm it returns processed/succeeded/failed counts.
 
 If Google token refresh fails later, the dashboard will show a reconnect state and the user should sign out and sign back in.
 
@@ -142,5 +212,6 @@ If Google token refresh fails later, the dashboard will show a reconnect state a
 - Keep `TOKEN_ENCRYPTION_KEY` stable. Changing it makes stored refresh tokens unreadable.
 - Keep `CRON_SECRET` private. Anyone with it can trigger scheduled work.
 - The app uses the Google `drive.file` scope, so it can access only files it creates or files explicitly granted in the future.
+- GitHub user OAuth is intentionally not implemented because OpenSignal only reads public repositories with a server-side token.
 - The run pipeline is idempotent by `(user, GitHub issue ID)`, so repeated runs should not duplicate sheet rows.
 - If a user deletes their sheet, the next run creates a replacement sheet.

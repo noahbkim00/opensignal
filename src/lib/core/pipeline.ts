@@ -5,6 +5,7 @@ import type {
   MatchedIssue,
   IssueStatus,
   RepoWithLabels,
+  RepoIdentifier,
 } from "./types";
 import {
   resolveEffectiveRepoSet,
@@ -18,14 +19,23 @@ export interface PipelineDeps {
   repos: Repositories;
 }
 
+export interface RunOptions {
+  languages?: string[];
+  repos?: RepoIdentifier[];
+  maxIssues?: number;
+  dryRun?: boolean;
+}
+
 const PIPELINE_FETCH_CONCURRENCY = 5;
 
 export async function runPipeline(
   userId: string,
   trigger: RunTrigger,
-  deps: PipelineDeps
+  deps: PipelineDeps,
+  options: RunOptions = {}
 ): Promise<RunResult> {
   const { github, sheets, repos } = deps;
+  const dryRun = options.dryRun === true;
 
   // Check for active run (concurrency control)
   const hasActive = await repos.hasActiveRun(userId);
@@ -35,6 +45,7 @@ export async function runPipeline(
       newIssuesCount: 0,
       staleIssuesCount: 0,
       error: "A run is already in progress",
+      dryRun,
     };
   }
 
@@ -60,18 +71,38 @@ export async function runPipeline(
     // Resolve effective repo set
     const curatedRepos = await repos.getCuratedRepos();
     const customRepos = await repos.getCustomRepos(userId);
+    const selectedLanguages = options.languages ?? config.selectedLanguages;
+    const selectedCustomRepos = options.repos ?? customRepos;
     const effectiveRepos = resolveEffectiveRepoSet(
-      config.selectedLanguages,
+      selectedLanguages,
       curatedRepos,
-      customRepos
+      selectedCustomRepos
     );
+
+    const baseActions = {
+      fetchedRepos: effectiveRepos.length,
+      createdSheet: false,
+      appendedRows: 0,
+      updatedStatuses: 0,
+      skippedSheetWrites: dryRun,
+    };
 
     if (effectiveRepos.length === 0) {
       await repos.updateRunStatus(runId, "success", {
         newIssuesCount: 0,
         staleIssuesCount: 0,
       });
-      return { success: true, newIssuesCount: 0, staleIssuesCount: 0 };
+      return {
+        success: true,
+        newIssuesCount: 0,
+        staleIssuesCount: 0,
+        dryRun,
+        effectiveRepos,
+        matchedIssuesCount: 0,
+        sheetId: null,
+        sheetUrl: null,
+        actions: baseActions,
+      };
     }
 
     // Fetch issues from all repos
@@ -86,13 +117,17 @@ export async function runPipeline(
     const trackedIssueIds = new Set(trackedIssues.map((t) => t.githubIssueId));
 
     // Find new issues (not yet tracked)
-    const newIssues = allMatchedIssues.filter(
+    const allNewIssues = allMatchedIssues.filter(
       (issue) => !trackedIssueIds.has(issue.id)
     );
+    const newIssues = options.maxIssues
+      ? allNewIssues.slice(0, options.maxIssues)
+      : allNewIssues;
 
     // Ensure sheet exists
     let spreadsheetId = await repos.getSheetId(userId);
-    if (spreadsheetId) {
+    let createdSheet = false;
+    if (spreadsheetId && !dryRun) {
       const exists = await sheets.checkSheetExists(spreadsheetId, accessToken);
       if (!exists) {
         await repos.deleteSheetRecord(userId);
@@ -100,14 +135,15 @@ export async function runPipeline(
       }
     }
 
-    if (!spreadsheetId) {
+    if (!spreadsheetId && !dryRun) {
       spreadsheetId = await sheets.ensureSheet(userId, accessToken);
       await repos.setSheetId(userId, spreadsheetId);
+      createdSheet = true;
     }
 
     // Append new issues to sheet
     let newIssuesCount = 0;
-    if (newIssues.length > 0) {
+    if (newIssues.length > 0 && !dryRun && spreadsheetId) {
       const rowIdMap = await sheets.appendIssues(
         spreadsheetId,
         newIssues,
@@ -120,6 +156,8 @@ export async function runPipeline(
         await repos.upsertTrackedIssue(userId, issue, sheetRowId);
       }
       newIssuesCount = newIssues.length;
+    } else if (dryRun) {
+      newIssuesCount = newIssues.length;
     }
 
     // Check for stale issues
@@ -130,7 +168,7 @@ export async function runPipeline(
     );
     let staleIssuesCount = 0;
 
-    if (staleUpdates.length > 0) {
+    if (staleUpdates.length > 0 && !dryRun && spreadsheetId) {
       // Update statuses in sheet
       const sheetUpdates = staleUpdates
         .filter((u) => u.sheetRowId)
@@ -152,6 +190,8 @@ export async function runPipeline(
         );
       }
       staleIssuesCount = staleUpdates.length;
+    } else if (dryRun) {
+      staleIssuesCount = staleUpdates.length;
     }
 
     await repos.updateRunStatus(runId, "success", {
@@ -159,7 +199,25 @@ export async function runPipeline(
       staleIssuesCount,
     });
 
-    return { success: true, newIssuesCount, staleIssuesCount };
+    return {
+      success: true,
+      newIssuesCount,
+      staleIssuesCount,
+      dryRun,
+      effectiveRepos,
+      matchedIssuesCount: allMatchedIssues.length,
+      sheetId: spreadsheetId,
+      sheetUrl: spreadsheetId
+        ? `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`
+        : null,
+      actions: {
+        fetchedRepos: effectiveRepos.length,
+        createdSheet,
+        appendedRows: dryRun ? 0 : newIssues.length,
+        updatedStatuses: dryRun ? 0 : staleUpdates.length,
+        skippedSheetWrites: dryRun,
+      },
+    };
   } catch (error) {
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error";
@@ -171,6 +229,7 @@ export async function runPipeline(
       newIssuesCount: 0,
       staleIssuesCount: 0,
       error: errorMessage,
+      dryRun,
     };
   }
 }

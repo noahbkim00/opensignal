@@ -30,11 +30,14 @@ function createFakeGitHubClient(
 function createFakeSheetProvider(): SheetProvider & {
   appendedIssues: MatchedIssue[];
   statusUpdates: Array<{ sheetRowId: string; status: IssueStatus }>;
+  ensuredSheetCount: number;
 } {
   return {
     appendedIssues: [],
     statusUpdates: [],
+    ensuredSheetCount: 0,
     async ensureSheet() {
+      this.ensuredSheetCount++;
       return "test-spreadsheet-id";
     },
     async appendIssues(_spreadsheetId, issues) {
@@ -414,5 +417,120 @@ describe("runPipeline", () => {
       sheetRowId: "row-100",
       status: "assigned",
     });
+  });
+
+  it("uses run-time language and repo overrides without changing saved config", async () => {
+    const issues: GitHubIssue[] = [
+      {
+        id: 200,
+        number: 2,
+        title: "Override issue",
+        url: "https://github.com/custom/repo/issues/2",
+        labels: ["good first issue"],
+        createdAt: new Date(),
+        state: "open",
+        assignee: null,
+      },
+    ];
+
+    const github = createFakeGitHubClient(new Map([["custom/repo", issues]]));
+    const sheets = createFakeSheetProvider();
+    const repos = createFakeRepositories({
+      config: { selectedLanguages: [] },
+      customRepos: [],
+    });
+
+    const result = await runPipeline(
+      "user-1",
+      "manual",
+      { github, sheets, repos },
+      {
+        languages: [],
+        repos: [{ owner: "custom", name: "repo" }],
+      }
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.newIssuesCount).toBe(1);
+    expect(result.effectiveRepos).toEqual([
+      {
+        owner: "custom",
+        name: "repo",
+        labelMapping: ["good first issue", "help wanted"],
+      },
+    ]);
+    expect(sheets.appendedIssues[0].repo).toEqual({
+      owner: "custom",
+      name: "repo",
+    });
+  });
+
+  it("limits new issue writes when maxIssues is provided", async () => {
+    const issues: GitHubIssue[] = [1, 2, 3].map((id) => ({
+      id,
+      number: id,
+      title: `Issue ${id}`,
+      url: `https://github.com/test/repo/issues/${id}`,
+      labels: ["good first issue"],
+      createdAt: new Date(),
+      state: "open" as const,
+      assignee: null,
+    }));
+
+    const github = createFakeGitHubClient(new Map([["test/repo", issues]]));
+    const sheets = createFakeSheetProvider();
+    const repos = createFakeRepositories({});
+
+    const result = await runPipeline(
+      "user-1",
+      "manual",
+      { github, sheets, repos },
+      { maxIssues: 2 }
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.matchedIssuesCount).toBe(3);
+    expect(result.newIssuesCount).toBe(2);
+    expect(sheets.appendedIssues.map((issue) => issue.id)).toEqual([1, 2]);
+  });
+
+  it("returns context without writing to sheets in dry-run mode", async () => {
+    const issues: GitHubIssue[] = [
+      {
+        id: 300,
+        number: 3,
+        title: "Dry run issue",
+        url: "https://github.com/test/repo/issues/3",
+        labels: ["good first issue"],
+        createdAt: new Date(),
+        state: "open",
+        assignee: null,
+      },
+    ];
+
+    const github = createFakeGitHubClient(new Map([["test/repo", issues]]));
+    const sheets = createFakeSheetProvider();
+    const repos = createFakeRepositories({ sheetId: null });
+
+    const result = await runPipeline(
+      "user-1",
+      "manual",
+      { github, sheets, repos },
+      { dryRun: true }
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.dryRun).toBe(true);
+    expect(result.newIssuesCount).toBe(1);
+    expect(result.actions).toEqual({
+      fetchedRepos: 1,
+      createdSheet: false,
+      appendedRows: 0,
+      updatedStatuses: 0,
+      skippedSheetWrites: true,
+    });
+    expect(sheets.ensuredSheetCount).toBe(0);
+    expect(sheets.appendedIssues).toHaveLength(0);
+    expect(sheets.statusUpdates).toHaveLength(0);
   });
 });
