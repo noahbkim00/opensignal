@@ -34,50 +34,24 @@ The app is split into three layers with one direction of dependency:
 
 ## Local Development
 
-### 1. Install dependencies
+OpenSignal depends on external services before it can run end to end: Postgres, Google OAuth with Sheets/Drive APIs enabled, a GitHub token, and app secrets. Use [self_host.md](./self_host.md) as the setup guide for those prerequisites, OAuth redirect URIs, database provisioning, and production smoke tests.
 
-```bash
-npm install
-```
-
-### 2. Configure environment variables
-
-Copy `.env.example` to `.env.local` and fill in each value:
+Once those services are configured, copy `.env.example` to `.env.local` and fill in the values from your local or hosted setup:
 
 ```bash
 cp .env.example .env.local
 ```
 
-| Variable | Description |
-|---|---|
-| `DATABASE_URL` | Postgres connection string |
-| `NEXTAUTH_SECRET` | Random secret for Auth.js |
-| `NEXTAUTH_URL` | Local app URL, usually `http://localhost:3000` |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google OAuth credentials |
-| `GITHUB_TOKEN` | GitHub token for fetching public issues |
-| `TOKEN_ENCRYPTION_KEY` | 32-byte base64 key for encrypting refresh tokens |
-| `CRON_SECRET` | Bearer secret protecting `/api/cron` |
-
-Generate a token encryption key with:
+Then install dependencies, prepare the database, and start the app:
 
 ```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
-```
-
-### 3. Prepare the database
-
-```bash
+npm install
 npm run db:push
 npm run db:seed
-```
-
-### 4. Run the app
-
-```bash
 npm run dev
 ```
 
-Open `http://localhost:3000`.
+Open `http://localhost:3000`. If Google sign-in, token refresh, or Sheets writes fail locally, re-check the Google OAuth/API and database setup in [self_host.md](./self_host.md).
 
 ## Scripts
 
